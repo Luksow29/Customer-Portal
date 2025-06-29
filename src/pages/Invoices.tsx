@@ -1,96 +1,86 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, Filter, Download, Eye, FileText } from 'lucide-react';
+import { supabase, formatCurrency, formatDate, getStatusBadgeVariant } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
-
-// Mock data - replace with real data from your API
-const invoices = [
-  {
-    id: 'INV-001',
-    orderId: 'ORD-001',
-    amount: '$125.00',
-    status: 'paid',
-    issueDate: '2024-01-15',
-    dueDate: '2024-01-30',
-    paidDate: '2024-01-18',
-    description: 'Business Cards - Premium matte finish'
-  },
-  {
-    id: 'INV-002',
-    orderId: 'ORD-002',
-    amount: '$89.50',
-    status: 'pending',
-    issueDate: '2024-01-14',
-    dueDate: '2024-01-29',
-    paidDate: null,
-    description: 'Flyers - A4 color marketing campaign'
-  },
-  {
-    id: 'INV-003',
-    orderId: 'ORD-003',
-    amount: '$245.00',
-    status: 'overdue',
-    issueDate: '2024-01-10',
-    dueDate: '2024-01-25',
-    paidDate: null,
-    description: 'Banners - Large outdoor weather-resistant'
-  },
-  {
-    id: 'INV-004',
-    orderId: 'ORD-004',
-    amount: '$67.25',
-    status: 'draft',
-    issueDate: '2024-01-12',
-    dueDate: '2024-01-27',
-    paidDate: null,
-    description: 'Brochures - Tri-fold custom design'
-  },
-  {
-    id: 'INV-005',
-    orderId: 'ORD-005',
-    amount: '$156.00',
-    status: 'paid',
-    issueDate: '2024-01-08',
-    dueDate: '2024-01-23',
-    paidDate: '2024-01-12',
-    description: 'Posters - A1 high-quality event promotion'
-  }
-];
-
-const statusColors = {
-  paid: 'success',
-  pending: 'warning',
-  overdue: 'error',
-  draft: 'info'
-} as const;
+import type { Payment } from '../lib/supabase';
 
 export default function Invoices() {
+  const { user } = useAuth();
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const filteredInvoices = invoices.filter(invoice => {
-    const matchesSearch = invoice.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         invoice.orderId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         invoice.description.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || invoice.status === statusFilter;
+  useEffect(() => {
+    if (user) {
+      fetchPayments();
+    }
+  }, [user]);
+
+  const fetchPayments = async () => {
+    if (!user) return;
+
+    try {
+      // Get customer record first
+      const { data: customer } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!customer) return;
+
+      const { data, error } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('customer_id', customer.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setPayments(data || []);
+    } catch (error) {
+      console.error('Error fetching payments:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredPayments = payments.filter(payment => {
+    const matchesSearch = 
+      payment.id.includes(searchQuery.toLowerCase()) ||
+      (payment.order_id && payment.order_id.toString().includes(searchQuery.toLowerCase()));
+    
+    const matchesStatus = statusFilter === 'all' || 
+      payment.status.toLowerCase() === statusFilter.toLowerCase();
+    
     return matchesSearch && matchesStatus;
   });
 
   const totals = {
-    total: invoices.reduce((sum, inv) => sum + parseFloat(inv.amount.replace('$', '')), 0),
-    paid: invoices.filter(inv => inv.status === 'paid').reduce((sum, inv) => sum + parseFloat(inv.amount.replace('$', '')), 0),
-    pending: invoices.filter(inv => inv.status === 'pending' || inv.status === 'overdue').reduce((sum, inv) => sum + parseFloat(inv.amount.replace('$', '')), 0)
+    total: payments.reduce((sum, payment) => sum + payment.total_amount, 0),
+    paid: payments.filter(p => p.status === 'Paid').reduce((sum, payment) => sum + payment.amount_paid, 0),
+    pending: payments.filter(p => ['Partial', 'Due'].includes(p.status)).reduce((sum, payment) => sum + (payment.total_amount - payment.amount_paid), 0)
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Invoices</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Payments</h1>
           <p className="mt-1 text-sm text-gray-500">
             Manage your billing and payment history
           </p>
@@ -111,8 +101,8 @@ export default function Invoices() {
               <FileText className="h-6 w-6 text-blue-600" />
             </div>
             <div className="ml-4">
-              <p className="text-sm font-medium text-gray-600">Total Invoiced</p>
-              <p className="text-2xl font-semibold text-gray-900">${totals.total.toFixed(2)}</p>
+              <p className="text-sm font-medium text-gray-600">Total Amount</p>
+              <p className="text-2xl font-semibold text-gray-900">{formatCurrency(totals.total)}</p>
             </div>
           </div>
         </Card>
@@ -123,7 +113,7 @@ export default function Invoices() {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Paid</p>
-              <p className="text-2xl font-semibold text-emerald-600">${totals.paid.toFixed(2)}</p>
+              <p className="text-2xl font-semibold text-emerald-600">{formatCurrency(totals.paid)}</p>
             </div>
           </div>
         </Card>
@@ -134,7 +124,7 @@ export default function Invoices() {
             </div>
             <div className="ml-4">
               <p className="text-sm font-medium text-gray-600">Outstanding</p>
-              <p className="text-2xl font-semibold text-amber-600">${totals.pending.toFixed(2)}</p>
+              <p className="text-2xl font-semibold text-amber-600">{formatCurrency(totals.pending)}</p>
             </div>
           </div>
         </Card>
@@ -146,7 +136,7 @@ export default function Invoices() {
           <div className="flex-1">
             <Input
               type="text"
-              placeholder="Search invoices..."
+              placeholder="Search payments..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               icon={<Search className="h-5 w-5" />}
@@ -160,9 +150,8 @@ export default function Invoices() {
             >
               <option value="all">All Status</option>
               <option value="paid">Paid</option>
-              <option value="pending">Pending</option>
-              <option value="overdue">Overdue</option>
-              <option value="draft">Draft</option>
+              <option value="partial">Partial</option>
+              <option value="due">Due</option>
             </select>
             <Button variant="outline" size="sm">
               <Filter className="h-4 w-4 mr-2" />
@@ -172,55 +161,58 @@ export default function Invoices() {
         </div>
       </Card>
 
-      {/* Invoices List */}
+      {/* Payments List */}
       <div className="space-y-4">
-        {filteredInvoices.map((invoice) => (
-          <Card key={invoice.id} hover>
+        {filteredPayments.map((payment) => (
+          <Card key={payment.id} hover>
             <div className="flex items-center justify-between">
               <div className="flex-1">
                 <div className="flex items-center space-x-4 mb-3">
-                  <h3 className="text-lg font-semibold text-gray-900">{invoice.id}</h3>
-                  <Badge variant={statusColors[invoice.status]}>
-                    {invoice.status}
+                  <h3 className="text-lg font-semibold text-gray-900">PAY-{payment.id.slice(-6)}</h3>
+                  <Badge variant={getStatusBadgeVariant(payment.status)}>
+                    {payment.status}
                   </Badge>
-                  <Link 
-                    to={`/orders/${invoice.orderId}`}
-                    className="text-sm text-blue-600 hover:text-blue-500"
-                  >
-                    {invoice.orderId}
-                  </Link>
+                  {payment.order_id && (
+                    <Link 
+                      to={`/orders/${payment.order_id}`}
+                      className="text-sm text-blue-600 hover:text-blue-500"
+                    >
+                      ORD-{payment.order_id}
+                    </Link>
+                  )}
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                   <div>
-                    <p className="text-sm text-gray-600">Amount</p>
-                    <p className="font-semibold text-gray-900 text-lg">{invoice.amount}</p>
+                    <p className="text-sm text-gray-600">Total Amount</p>
+                    <p className="font-semibold text-gray-900 text-lg">{formatCurrency(payment.total_amount)}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-gray-600">Issue Date</p>
-                    <p className="font-medium text-gray-900">{invoice.issueDate}</p>
+                    <p className="text-sm text-gray-600">Amount Paid</p>
+                    <p className="font-medium text-emerald-600">{formatCurrency(payment.amount_paid)}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600">Created Date</p>
+                    <p className="font-medium text-gray-900">{formatDate(payment.created_at)}</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Due Date</p>
                     <p className={`font-medium ${
-                      invoice.status === 'overdue' ? 'text-red-600' : 'text-gray-900'
+                      payment.due_date && new Date(payment.due_date) < new Date() && payment.status !== 'Paid' 
+                        ? 'text-red-600' : 'text-gray-900'
                     }`}>
-                      {invoice.dueDate}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-600">Paid Date</p>
-                    <p className="font-medium text-gray-900">
-                      {invoice.paidDate || '-'}
+                      {payment.due_date ? formatDate(payment.due_date) : '-'}
                     </p>
                   </div>
                 </div>
                 
-                <p className="text-sm text-gray-600">{invoice.description}</p>
+                {payment.notes && (
+                  <p className="text-sm text-gray-600">{payment.notes}</p>
+                )}
               </div>
               
               <div className="flex items-center space-x-2 ml-4">
-                <Link to={`/invoices/${invoice.id}`}>
+                <Link to={`/invoices/${payment.id}`}>
                   <Button variant="outline" size="sm">
                     <Eye className="h-4 w-4 mr-2" />
                     View
@@ -230,7 +222,7 @@ export default function Invoices() {
                   <Download className="h-4 w-4 mr-2" />
                   Download
                 </Button>
-                {invoice.status === 'pending' && (
+                {payment.status !== 'Paid' && (
                   <Button size="sm">
                     Pay Now
                   </Button>
@@ -241,15 +233,15 @@ export default function Invoices() {
         ))}
       </div>
 
-      {filteredInvoices.length === 0 && (
+      {filteredPayments.length === 0 && (
         <Card className="text-center py-12">
           <div className="text-gray-500">
             <FileText className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <h3 className="text-lg font-medium mb-2">No invoices found</h3>
+            <h3 className="text-lg font-medium mb-2">No payments found</h3>
             <p className="text-sm">
               {searchQuery || statusFilter !== 'all' 
                 ? 'Try adjusting your search or filters'
-                : 'You don\'t have any invoices yet'
+                : 'You don\'t have any payments yet'
               }
             </p>
           </div>

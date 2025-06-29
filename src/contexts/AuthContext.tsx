@@ -1,21 +1,20 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { supabase } from '../lib/supabase';
+import type { User as SupabaseUser } from '@supabase/supabase-js';
+import type { UserProfile } from '../lib/supabase';
 
-interface User {
-  id: string;
-  email: string;
-  name: string;
-  company?: string;
-  phone?: string;
-  avatar?: string;
+interface User extends UserProfile {
+  // Additional user properties if needed
 }
 
 interface AuthContextType {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string, name: string, company?: string) => Promise<void>;
+  signup: (email: string, password: string, name: string, company?: string, phone?: string) => Promise<void>;
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  updateProfile: (updates: Partial<UserProfile>) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,65 +31,154 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const fetchUserProfile = async (supabaseUser: SupabaseUser): Promise<User | null> => {
+    try {
+      // First, check if customer profile exists
+      const { data: customer, error } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('user_id', supabaseUser.id)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error fetching customer profile:', error);
+        return null;
+      }
+
+      if (customer) {
+        return {
+          id: supabaseUser.id,
+          name: customer.name,
+          email: supabaseUser.email || customer.email || '',
+          phone: customer.phone,
+          address: customer.address,
+          company_name: customer.company_name,
+          joined_date: customer.joined_date,
+          total_orders: customer.total_orders || 0,
+          total_spent: customer.total_spent || 0,
+          last_interaction: customer.last_interaction,
+          billing_address: customer.billing_address,
+          shipping_address: customer.shipping_address,
+          birthday: customer.birthday,
+          secondary_phone: customer.secondary_phone,
+          tags: customer.tags || []
+        };
+      }
+
+      // If no customer profile exists, create one
+      const newCustomer = {
+        user_id: supabaseUser.id,
+        name: supabaseUser.user_metadata?.name || supabaseUser.email?.split('@')[0] || 'User',
+        email: supabaseUser.email,
+        phone: supabaseUser.user_metadata?.phone || '',
+        company_name: supabaseUser.user_metadata?.company || '',
+        total_orders: 0,
+        total_spent: 0
+      };
+
+      const { data: createdCustomer, error: createError } = await supabase
+        .from('customers')
+        .insert([newCustomer])
+        .select()
+        .single();
+
+      if (createError) {
+        console.error('Error creating customer profile:', createError);
+        return null;
+      }
+
+      return {
+        id: supabaseUser.id,
+        name: createdCustomer.name,
+        email: supabaseUser.email || '',
+        phone: createdCustomer.phone,
+        address: createdCustomer.address,
+        company_name: createdCustomer.company_name,
+        joined_date: createdCustomer.joined_date,
+        total_orders: 0,
+        total_spent: 0,
+        last_interaction: createdCustomer.last_interaction,
+        billing_address: createdCustomer.billing_address,
+        shipping_address: createdCustomer.shipping_address,
+        birthday: createdCustomer.birthday,
+        secondary_phone: createdCustomer.secondary_phone,
+        tags: createdCustomer.tags || []
+      };
+    } catch (error) {
+      console.error('Error in fetchUserProfile:', error);
+      return null;
+    }
+  };
+
   useEffect(() => {
-    // Simulate checking for existing session
-    const checkAuth = async () => {
+    // Get initial session
+    const getInitialSession = async () => {
       try {
-        const savedUser = localStorage.getItem('user');
-        if (savedUser) {
-          setUser(JSON.parse(savedUser));
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session?.user) {
+          const userProfile = await fetchUserProfile(session.user);
+          setUser(userProfile);
         }
       } catch (error) {
-        console.error('Auth check failed:', error);
+        console.error('Error getting initial session:', error);
       } finally {
         setLoading(false);
       }
     };
 
-    checkAuth();
+    getInitialSession();
+
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      async (event, session) => {
+        if (session?.user) {
+          const userProfile = await fetchUserProfile(session.user);
+          setUser(userProfile);
+        } else {
+          setUser(null);
+        }
+        setLoading(false);
+      }
+    );
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const login = async (email: string, password: string) => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // Mock user data
-      const mockUser: User = {
-        id: '1',
+      const { error } = await supabase.auth.signInWithPassword({
         email,
-        name: 'John Doe',
-        company: 'Acme Corp',
-        phone: '+1 (555) 123-4567'
-      };
-      
-      setUser(mockUser);
-      localStorage.setItem('user', JSON.stringify(mockUser));
+        password
+      });
+
+      if (error) throw error;
     } catch (error) {
-      throw new Error('Login failed. Please try again.');
+      throw new Error(error instanceof Error ? error.message : 'Login failed');
     } finally {
       setLoading(false);
     }
   };
 
-  const signup = async (email: string, password: string, name: string, company?: string) => {
+  const signup = async (email: string, password: string, name: string, company?: string, phone?: string) => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      const mockUser: User = {
-        id: '1',
+      const { error } = await supabase.auth.signUp({
         email,
-        name,
-        company
-      };
-      
-      setUser(mockUser);
-      localStorage.setItem('user', JSON.stringify(mockUser));
+        password,
+        options: {
+          data: {
+            name,
+            company,
+            phone
+          }
+        }
+      });
+
+      if (error) throw error;
     } catch (error) {
-      throw new Error('Signup failed. Please try again.');
+      throw new Error(error instanceof Error ? error.message : 'Signup failed');
     } finally {
       setLoading(false);
     }
@@ -99,22 +187,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     setLoading(true);
     try {
-      // Simulate API call
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
       setUser(null);
-      localStorage.removeItem('user');
     } catch (error) {
-      console.error('Logout failed:', error);
+      console.error('Logout error:', error);
     } finally {
       setLoading(false);
     }
   };
 
   const resetPassword = async (email: string) => {
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    // In real implementation, this would send a reset email
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`
+    });
+
+    if (error) throw error;
+  };
+
+  const updateProfile = async (updates: Partial<UserProfile>) => {
+    if (!user) throw new Error('No user logged in');
+
+    try {
+      const { error } = await supabase
+        .from('customers')
+        .update({
+          name: updates.name,
+          phone: updates.phone,
+          address: updates.address,
+          company_name: updates.company_name,
+          billing_address: updates.billing_address,
+          shipping_address: updates.shipping_address,
+          birthday: updates.birthday,
+          secondary_phone: updates.secondary_phone,
+          updated_at: new Date().toISOString()
+        })
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      // Update local user state
+      setUser(prev => prev ? { ...prev, ...updates } : null);
+    } catch (error) {
+      throw new Error(error instanceof Error ? error.message : 'Profile update failed');
+    }
   };
 
   const value = {
@@ -123,7 +239,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     login,
     signup,
     logout,
-    resetPassword
+    resetPassword,
+    updateProfile
   };
 
   return (

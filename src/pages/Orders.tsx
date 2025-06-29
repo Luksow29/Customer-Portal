@@ -1,83 +1,75 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Search, Filter, Download, Eye, Plus } from 'lucide-react';
+import { Search, Filter, Download, Eye, Plus, Package } from 'lucide-react';
+import { supabase, formatCurrency, formatDate, getStatusBadgeVariant } from '../lib/supabase';
+import { useAuth } from '../contexts/AuthContext';
 import Card from '../components/ui/Card';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import Badge from '../components/ui/Badge';
-
-// Mock data - replace with real data from your API
-const orders = [
-  {
-    id: 'ORD-001',
-    type: 'Business Cards',
-    quantity: 500,
-    status: 'completed',
-    orderDate: '2024-01-15',
-    deliveryDate: '2024-01-18',
-    total: '$125.00',
-    description: 'Premium matte finish business cards with logo'
-  },
-  {
-    id: 'ORD-002',
-    type: 'Flyers',
-    quantity: 1000,
-    status: 'printing',
-    orderDate: '2024-01-14',
-    deliveryDate: '2024-01-17',
-    total: '$89.50',
-    description: 'A4 color flyers for marketing campaign'
-  },
-  {
-    id: 'ORD-003',
-    type: 'Banners',
-    quantity: 2,
-    status: 'pending',
-    orderDate: '2024-01-13',
-    deliveryDate: '2024-01-20',
-    total: '$245.00',
-    description: 'Large outdoor banners with weather-resistant material'
-  },
-  {
-    id: 'ORD-004',
-    type: 'Brochures',
-    quantity: 250,
-    status: 'design_review',
-    orderDate: '2024-01-12',
-    deliveryDate: '2024-01-19',
-    total: '$67.25',
-    description: 'Tri-fold brochures with custom design'
-  },
-  {
-    id: 'ORD-005',
-    type: 'Posters',
-    quantity: 50,
-    status: 'completed',
-    orderDate: '2024-01-10',
-    deliveryDate: '2024-01-12',
-    total: '$156.00',
-    description: 'A1 high-quality posters for event promotion'
-  }
-];
-
-const statusColors = {
-  pending: 'warning',
-  design_review: 'info',
-  printing: 'info',
-  completed: 'success',
-  cancelled: 'error'
-} as const;
+import type { Order } from '../lib/supabase';
 
 export default function Orders() {
+  const { user } = useAuth();
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
+  useEffect(() => {
+    if (user) {
+      fetchOrders();
+    }
+  }, [user]);
+
+  const fetchOrders = async () => {
+    if (!user) return;
+
+    try {
+      // Get customer record first
+      const { data: customer } = await supabase
+        .from('customers')
+        .select('id')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!customer) return;
+
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*')
+        .eq('customer_id', customer.id)
+        .eq('is_deleted', false)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setOrders(data || []);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const filteredOrders = orders.filter(order => {
-    const matchesSearch = order.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         order.type.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || order.status === statusFilter;
+    const matchesSearch = 
+      order.id.toString().includes(searchQuery.toLowerCase()) ||
+      order.order_type.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      order.customer_name.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const matchesStatus = statusFilter === 'all' || 
+      (order.date && order.date.toLowerCase() === statusFilter.toLowerCase());
+    
     return matchesSearch && matchesStatus;
   });
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -117,9 +109,9 @@ export default function Orders() {
             >
               <option value="all">All Status</option>
               <option value="pending">Pending</option>
-              <option value="design_review">Design Review</option>
+              <option value="design">Design</option>
               <option value="printing">Printing</option>
-              <option value="completed">Completed</option>
+              <option value="delivered">Delivered</option>
             </select>
             <Button variant="outline" size="sm">
               <Filter className="h-4 w-4 mr-2" />
@@ -140,30 +132,37 @@ export default function Orders() {
             <div className="flex items-center justify-between">
               <div className="flex-1">
                 <div className="flex items-center space-x-4 mb-3">
-                  <h3 className="text-lg font-semibold text-gray-900">{order.id}</h3>
-                  <Badge variant={statusColors[order.status]}>
-                    {order.status.replace('_', ' ')}
+                  <h3 className="text-lg font-semibold text-gray-900">ORD-{order.id}</h3>
+                  <Badge variant={getStatusBadgeVariant(order.date || 'pending')}>
+                    {order.date || 'pending'}
                   </Badge>
                 </div>
                 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                   <div>
                     <p className="text-sm text-gray-600">Product</p>
-                    <p className="font-medium text-gray-900">{order.type}</p>
+                    <p className="font-medium text-gray-900">{order.order_type}</p>
                     <p className="text-sm text-gray-500">{order.quantity} units</p>
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Order Date</p>
-                    <p className="font-medium text-gray-900">{order.orderDate}</p>
-                    <p className="text-sm text-gray-500">Due: {order.deliveryDate}</p>
+                    <p className="font-medium text-gray-900">{formatDate(order.date)}</p>
+                    {order.delivery_date && (
+                      <p className="text-sm text-gray-500">Due: {formatDate(order.delivery_date)}</p>
+                    )}
                   </div>
                   <div>
                     <p className="text-sm text-gray-600">Total</p>
-                    <p className="font-medium text-gray-900">{order.total}</p>
+                    <p className="font-medium text-gray-900">{formatCurrency(order.total_amount)}</p>
+                    {order.balance_amount && order.balance_amount > 0 && (
+                      <p className="text-sm text-red-600">Balance: {formatCurrency(order.balance_amount)}</p>
+                    )}
                   </div>
                 </div>
                 
-                <p className="text-sm text-gray-600">{order.description}</p>
+                {order.notes && (
+                  <p className="text-sm text-gray-600">{order.notes}</p>
+                )}
               </div>
               
               <div className="flex items-center space-x-2 ml-4">
